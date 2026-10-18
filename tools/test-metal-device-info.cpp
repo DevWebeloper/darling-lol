@@ -49,6 +49,18 @@ int main() {
 	expectName("", MTLDeviceInfo::kFallbackName);
 	expectName(nullptr, MTLDeviceInfo::kFallbackName);
 
+	// Anti-cheat stealth identity constants: AMD Radeon Pro 5500M, 4 GB VRAM, non-zero IOKit ID.
+	{
+		bool ok = std::string(MTLDeviceInfo::kFallbackName) == "AMD Radeon Pro 5500M";
+		failures += !ok;
+		std::printf("%s fallback name is AMD Radeon Pro 5500M\n", ok ? "PASS" : "FAIL");
+	}
+	{
+		bool ok = MTLDeviceInfo::kDefaultRegistryID == 0x100000439ULL;
+		failures += !ok;
+		std::printf("%s registry ID is 0x100000439\n", ok ? "PASS" : "FAIL");
+	}
+
 	// DARLING_METAL_GPU_NAME override.
 	{
 		bool ok = MTLDeviceInfo::resolveName("My GPU", "AMD Radeon RX 6800 XT (RADV NAVI21)") == "My GPU"
@@ -56,6 +68,19 @@ int main() {
 		       && MTLDeviceInfo::resolveName(nullptr, "NVIDIA GeForce RTX 4090") == "NVIDIA GeForce RTX 4090";
 		failures += !ok;
 		std::printf("%s name override\n", ok ? "PASS" : "FAIL");
+	}
+
+	// resolveDeviceName: stealth default -> "AMD Radeon Pro 5500M", unless host GPU requested or explicit name given.
+	{
+		bool ok = MTLDeviceInfo::resolveDeviceName(nullptr, "AMD Radeon RX 6800 XT (RADV NAVI21)", false) == "AMD Radeon Pro 5500M"
+		       && MTLDeviceInfo::resolveDeviceName("", "NVIDIA GeForce RTX 4090", false) == "AMD Radeon Pro 5500M"
+		       && MTLDeviceInfo::resolveDeviceName(nullptr, "NVIDIA GeForce RTX 4090", true) == "NVIDIA GeForce RTX 4090"
+		       && MTLDeviceInfo::resolveDeviceName("Custom GPU", "NVIDIA GeForce RTX 4090", false) == "Custom GPU"
+		       && MTLDeviceInfo::resolveDeviceName("Custom GPU", "NVIDIA GeForce RTX 4090", true) == "Custom GPU"
+		       && MTLDeviceInfo::resolveDeviceName(nullptr, nullptr, true) == "AMD Radeon Pro 5500M"
+		       && MTLDeviceInfo::resolveDeviceName(nullptr, "   ", true) == "AMD Radeon Pro 5500M";
+		failures += !ok;
+		std::printf("%s resolveDeviceName anti-cheat stealth defaults and overrides\n", ok ? "PASS" : "FAIL");
 	}
 
 	// DARLING_METAL_VRAM_MB parsing: positive decimal integer only.
@@ -72,6 +97,14 @@ int main() {
 	expectBytes("vram max", MTLDeviceInfo::parseMegabytes("17592186044415"), 17592186044415ull * MiB);
 	expectBytes("vram overflow", MTLDeviceInfo::parseMegabytes("17592186044416"), 0);
 	expectBytes("vram huge", MTLDeviceInfo::parseMegabytes("99999999999999999999999"), 0);
+
+	// resolveWorkingSetBytes: stealth default 4 GB, host heap size with useHostGpu=true, or explicit override.
+	const unsigned long long default4GB = 4ull << 30;
+	expectBytes("working set stealth default", MTLDeviceInfo::resolveWorkingSetBytes(0, 8192 * MiB, false), default4GB);
+	expectBytes("working set stealth host", MTLDeviceInfo::resolveWorkingSetBytes(0, 8192 * MiB, true), 8192 * MiB);
+	expectBytes("working set stealth host fallback", MTLDeviceInfo::resolveWorkingSetBytes(0, 0, true), default4GB);
+	expectBytes("working set vram override default", MTLDeviceInfo::resolveWorkingSetBytes(2048 * MiB, 8192 * MiB, false), 2048 * MiB);
+	expectBytes("working set vram override host", MTLDeviceInfo::resolveWorkingSetBytes(2048 * MiB, 8192 * MiB, true), 2048 * MiB);
 
 	// Working set from Vulkan heaps.
 	const MTLDeviceInfo::Heap discrete[] = {{8192 * MiB, true}, {16384 * MiB, false}, {256 * MiB, true}};

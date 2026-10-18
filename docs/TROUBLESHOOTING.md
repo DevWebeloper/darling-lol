@@ -375,6 +375,21 @@ Tested on a GTX 1060 6GB with driver 580.178.04 on NixOS, Hyprland and Xwayland:
 the client and the tutorial match render on the NVIDIA GPU. Newer drivers were not
 retested with the option off.
 
+### Metal GPU device spoofing and overrides
+
+By default, Metal device reporting mimics a genuine macOS GPU (`AMD Radeon Pro 5500M`, 4 GB VRAM budget, and non-zero IOKit registry ID `0x100000439`) to prevent host Linux graphics card descriptors from leaking into game telemetry.
+
+> **Note on Hardware Compatibility**: This default profile is verified and working fine on AMD GPU setups. It has not been tested on other vendors (e.g. NVIDIA or Intel).
+
+To use the host GPU's Vulkan device name and working set size instead, set:
+```sh
+export DARLING_METAL_USE_HOST_GPU=1
+```
+
+Individual properties can also be overridden explicitly:
+- `DARLING_METAL_GPU_NAME`: custom GPU name string reported by `[MTLDevice name]`.
+- `DARLING_METAL_VRAM_MB`: custom working set size in megabytes (e.g. `8192`).
+
 ### Host-side checks
 
 These are host settings, not game settings. Run on AC power, and use a performance power profile (`powerprofilesctl set performance`, or `asusctl profile -P Performance` on ASUS laptops). On the tested desktop the game is limited mostly by its own main thread on the CPU, not by the GPU (see [status](STATUS.md#game-fps-2026-10-1314)), so laptop CPU power limits matter as much as the GPU choice.

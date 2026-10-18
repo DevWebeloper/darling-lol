@@ -23,7 +23,12 @@ c++ -std=c++17 -I build/darling-src/src/external/metal/private-include \
 build/test-metal-device-info
 ```
 
-Expected: `METAL_DEVICE_INFO failures=0 pass=1`. It covers how `MTLDevice.name` turns Vulkan names into macOS style (`AMD Radeon RX 6800 XT (RADV NAVI21)` becomes `AMD Radeon RX 6800 XT`, `Intel(R) UHD Graphics 630 (CML GT2)` becomes `Intel UHD Graphics 630`, NVIDIA names stay as they are), the `DARLING_METAL_VRAM_MB` parser, and the working-set sum over Vulkan heaps.
+Expected: `METAL_DEVICE_INFO failures=0 pass=1`. It covers the anti-cheat stealth default profile (`AMD Radeon Pro 5500M`, 4 GB VRAM budget, IOKit registry ID `0x100000439`), how `MTLDevice.name` turns Vulkan names into macOS style when `DARLING_METAL_USE_HOST_GPU=1` is selected, the `DARLING_METAL_VRAM_MB` parser, and the working-set sum over Vulkan heaps.
+
+Run the unit test suite covering Metal device reporting and patch integrity:
+```sh
+python3 -m unittest tests/test_metal_device_compatibility.py
+```
 
 The LLVM version check compiles Iridium's actual dynamic loader against small stub libraries. It verifies that a matching major initializes, older/newer majors produce a version mismatch, and a missing library fails initialization. It does not start Darling. The native AIR translator (`python3 tools/build-riot-air-check.py --native`) selects both headers and the shared library from the same `llvm-config`; its build prints those paths so shader results can be attributed to the tested LLVM installation.
 
