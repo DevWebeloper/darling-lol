@@ -4821,7 +4821,7 @@ index 628a4f7..705b845 100644
 +	vc.flags = (options & XATTR_NOFOLLOW) ? 0 : VCHROOT_FOLLOW;
 +	vc.dfd = get_perthread_wd();
 +
-+	strcpy(vc.path, path);
++	strlcpy(vc.path, path, sizeof(vc.path));
 +	ret = vchroot_expand(&vc);
 +	if (ret < 0)
 +		return errno_linux_to_bsd(ret);
@@ -4849,7 +4849,7 @@ index c1b2d50..4e19963 100644
  
  #include <sys/errno.h>
  
-+extern char* strcpy(char* dst, const char* src);
++extern unsigned long strlcpy(char* dst, const char* src, unsigned long siz);
 +
  #include <darling/emulation/common/base.h>
  #include <darling/emulation/conversion/errno.h>
@@ -4876,7 +4876,7 @@ index c1b2d50..4e19963 100644
 +	vc.flags = (options & XATTR_NOFOLLOW) ? 0 : VCHROOT_FOLLOW;
 +	vc.dfd = get_perthread_wd();
 +
-+	strcpy(vc.path, path);
++	strlcpy(vc.path, path, sizeof(vc.path));
 +	ret = vchroot_expand(&vc);
 +	if (ret < 0)
 +		return errno_linux_to_bsd(ret);
@@ -4958,7 +4958,7 @@ index b998456..c6281e6 100644
  
  	if (code < 0) {
  		if (code == -LINUX_EINTR) {
-@@ -92,33 +117,860 @@ retry:
+@@ -92,33 +117,866 @@ retry:
  			}
  		}
  		__simple_printf("mach_msg_overwrite failed (internally): %d\n", code);
@@ -5624,6 +5624,12 @@ index b998456..c6281e6 100644
 +};
 +#define LREGION_IOCTL 0xC0686611ul /* PROCMAP_QUERY = _IOWR('f', 17, struct procmap_query), 104 bytes */
 +#define LREGION_SHORT_INFO_COUNT 12 /* VM_REGION_SUBMAP_SHORT_INFO_COUNT_64 */
++#ifndef SM_PRIVATE
++#define SM_PRIVATE 2
++#endif
++#ifndef SM_SHARED
++#define SM_SHARED 4
++#endif
 +struct lregion_short_info {
 +	int protection, max_protection;
 +	unsigned int inheritance;
@@ -5758,7 +5764,7 @@ index b998456..c6281e6 100644
 +				/* Compatibility with duct-tape memory.c: the server fills the LONG structure,
 +				 * then MIG copies only its first 48 bytes for a short request. Its share_mode
 +				 * lands at byte 47 (short-structure trailing padding), not the short share_mode. */
-+				((unsigned char*)out)[47] = (q.vma_flags & 8) ? 4 : 2;
++				((unsigned char*)out)[47] = (q.vma_flags & 8) ? SM_SHARED : SM_PRIVATE;
 +				out->max_protection = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
 +				*address = q.vma_start;
 +				*size = q.vma_end - q.vma_start;
@@ -5822,7 +5828,7 @@ index b998456..c6281e6 100644
  	}
  
  	return code;
-@@ -128,21 +980,33 @@ kern_return_t semaphore_signal_thread_trap_impl(
+@@ -128,21 +986,33 @@ kern_return_t semaphore_signal_thread_trap_impl(
  				mach_port_name_t signal_name,
  				mach_port_name_t thread_name)
  {

@@ -36,6 +36,26 @@ This is a development snapshot, not a finished launcher. Riot and League clients
 - Reusable server receive buffers and Darwin allocator hints translated to Linux lazy reclamation.
 - Build/install/launch wrappers, atomic incremental installers and standalone regression probes.
 
+## Fork Additions: Anti-Cheat & Hardware Telemetry Spoofing
+
+Unlike upstream `darling-lol`, **this fork contains built-in hardware identity, SMBIOS, GPU, and environment spoofing** to disguise the Darling container from Riot Vanguard and automated anti-cheat telemetry:
+
+1. **SMBIOS & Apple Identity Spoofing (`tools/gen-darling-smbios.py`):**
+   - Automatically generates a per-prefix valid Apple Base-34 Serial Number, 17-character MLB (`mlb-serial-number`), Apple OUI ROM, and Board ID (`Mac-E7203C0F68AA0004` for `MacBookPro16,1`).
+   - Generates random `IOPlatformUUID`, little-endian 16-byte `system-id`, and `provisioning_UDID`, replacing compromised public defaults across all installs.
+2. **GPU Telemetry Masking (`patches/metal.patch`):**
+   - Replaces Darling's default `Darling Indium Device` string in Metal with an authentic AMD Radeon Pro profile and sets a realistic 4 GB VRAM budget, preventing host Linux GPU leaks (e.g. desktop NVIDIA RTX or AMD RX cards) into `r3dlog.txt`.
+3. **Launcher Environment & Host Scrubbing (`scripts/run.sh`):**
+   - Strips Linux-specific host variables (`XDG_*`, `MESA_*`, `DRI_*`, `WAYLAND_DISPLAY`, `DBUS_*`, desktop sessions, etc.) before running configure or the client.
+   - Closes leaked host file descriptors (`fd > 2`) to prevent container detection via open handles.
+4. **CPU Topology & Frequency Fixes:**
+   - Standardizes CPU topology to MacBookPro16,1 specifications (8c/16t) and fixes kernel `sysctl` reporting (`hw.cpufrequency` reporting 2.4 GHz instead of 2 MHz).
+5. **macOS System Integrity Protection (SIP) & Code Signing:**
+   - Emulates SIP enabled status and code-signing trust stubs required by Vanguard's embedded integrity checks.
+
+> [!WARNING]
+> While this spoofing prevents obvious telemetry flags and immediate environment rejection by Vanguard, playing on Linux through Darling is **still unauthorized third-party tooling**. Never use your primary account.
+
 Game files, Riot installers, account databases, tokens, local prefixes, captures and compiled binaries are not included. Install the game manually through Riot. The normal launcher does not enable an Electron inspector or start UI automation helpers. The launcher clears `DYLD_INSERT_LIBRARIES` and retains Darling runtime library/framework overrides; this is not a claim of approval by Riot.
 
 ## Requirements
@@ -108,6 +128,17 @@ Sign in and install League through Riot's own UI. For subsequent launches:
 First installation and future Riot updates can still encounter compatibility gaps. An accepted Install action can fail native LaunchAgent registration and leave the download idle. The archived inspector-based workaround is excluded from the manual workflow; the client window-visibility correction is part of the installed runtime (Darling's AppKit overlay), not a patch to Riot's binaries. See [troubleshooting](docs/TROUBLESHOOTING.md) for the known limitation and fixes that are in the runtime.
 
 For another region, set `RCLOL_REGION` and `RCLOL_LOCALE` before launch. For example `RCLOL_REGION=NA RCLOL_LOCALE=en_US ./scripts/run.sh`. Linux display selection follows `$DISPLAY`; the legacy launcher fallback is `:1`.
+
+## Desktop Launcher (.desktop)
+
+To install the desktop launcher for your GNOME / FreeDesktop application grid and desktop:
+
+```sh
+./scripts/create-desktop-entry.sh
+```
+
+This installs **League** with anti-cheat hardware spoofing, custom emblem icon, and Gamescope support (`--gamescope`).
+
 
 ## Testing
 
