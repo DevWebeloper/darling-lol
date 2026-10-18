@@ -2,72 +2,13 @@
 # Launch Riot Client using the Darling runtime, without library injection.
 # Darling supplies Xlib Display pointers to EGL, so select X11 explicitly.
 set -eu
-
-close_inherited_fds() {
-  if [ -d /proc/self/fd ]; then
-    for fd_path in /proc/self/fd/*; do
-      fd="${fd_path##*/}"
-      case "$fd" in
-        0|1|2|'*') ;;
-        *)
-          eval "exec ${fd}>&-" 2>/dev/null || true
-          ;;
-      esac
-    done
-  else
-    _fd=3
-    while [ "$_fd" -le 256 ]; do
-      eval "exec ${_fd}>&-" 2>/dev/null || true
-      _fd=$((_fd + 1))
-    done
-  fi
-}
-
-sanitize_host_environment() {
-  _linux_vars=$(env | awk -F= '
-    /^[A-Za-z_][A-Za-z0-9_]*=/ {
-      k = $1
-      if (k ~ /^(XDG_|MESA_|DRI_|ROCM_|LIBGL_|__GL_|DBUS_|SSH_|SYSTEMD_|GNOME_|KDE_|PULSE_|PIPEWIRE_|ALSA_|QT_|GTK_|GDK_|GIO_|GSETTINGS_|GJS_|GLIBC_|MEMORY_PRESSURE_|VIRTUAL_ENV|ZSH_TMUX_|GAMEMODE|VK_|VULKAN_|LIBVA_|VDPAU_|GBM_|FLATPAK_|SNAP_|DEBUGINFOD_|PAM_|SELINUX_|ANTIGRAVITY_|AGY_)/) {
-        print k
-      } else if (k ~ /^(WAYLAND_DISPLAY|DESKTOP_SESSION|DESKTOP_STARTUP_ID|GDMSESSION|GDM_LANG|GDM_SETUP_DISPLAY|GNOME_SETUP_DISPLAY|SESSION_MANAGER|INVOCATION_ID|JOURNAL_STREAM|MANAGERPID|MANAGERPIDFDID|NOTIFY_SOCKET|LISTEN_FDS|LISTEN_PID|LISTEN_FDNAMES|COLORTERM|VTE_VERSION|WINDOWID|WINDOWPATH|XCURSOR_THEME|XCURSOR_SIZE|CHROME_DESKTOP|FC_FONTATIONS|NO_AT_BRIDGE|MOTD_SHOWN|LD_PRELOAD|LD_LIBRARY_PATH|ELECTRON_RUN_AS_NODE|DYLD_INSERT_LIBRARIES|XAUTHORITY|mesa_glthread|SNAP|APPIMAGE|APPDIR|OWD|USERNAME|MAIL|LS_COLORS|COLORFGBG|VSSCRIPT_PATH|CHROME_DEVTOOLS_MCP_JS|LC_ADDRESS|LC_IDENTIFICATION|LC_MEASUREMENT|LC_NAME|LC_PAPER|LC_TELEPHONE|PAGER|GIT_PAGER|MANPAGER|MANROFFOPT|SHLVL|DISABLE_AUTO_UPDATE)$/) {
-        print k
-      }
-    }
-    /^BASH_FUNC_/ {
-      k = $0
-      sub(/%%=.*/, "", k)
-      sub(/=.*/, "", k)
-      print k
-    }')
-  for _var in $_linux_vars; do
-    case "$_var" in
-      BASH_FUNC_*)
-        _fn="${_var#BASH_FUNC_}"
-        _fn="${_fn%%%}"
-        unset -f "$_fn" 2>/dev/null || true
-        unset -v "$_var" 2>/dev/null || true
-        ;;
-      *)
-        unset -v "$_var" 2>/dev/null || unset "$_var" 2>/dev/null || true
-        ;;
-    esac
-  done
-  unset _linux_vars _var _fn _fd
-}
-
-# Close leaked inherited host file descriptors > 2 early so sub-tools don't inherit them.
-close_inherited_fds
-# Strip Linux-specific host variables early so sub-tools run in a clean environment.
-sanitize_host_environment
 # Native guest crashes created large system core files and exhausted this disk.
 # Address-only diagnostics suffice; bound this runner and its new namespace.
 if [ "${RCLOL_CORE_DUMPS:-0}" != 1 ]; then
  ulimit -c 0
 fi
 runner_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-if [ -f "$runner_dir/runtime-paths.sh" ]; then
- . "$runner_dir/runtime-paths.sh"
-fi
+. "$runner_dir/runtime-paths.sh"
 if [ "${RCLOL_RECOVER_HIDDEN_CLIENT:-0}" = 1 ]; then
  python3 "$runner_dir/recover-hidden-riot-client.py"
 fi
@@ -88,15 +29,17 @@ unset RCLOL_APP_ARG3 RCLOL_APP_ARG3_SLOT RCLOL_UX_ARG1 RCLOL_UX_ARG1_SLOT
 unset RCLOL_UX_ARG2 RCLOL_UX_ARG2_SLOT
 # The paired runtime presents completed GPU textures without CPU readback.
 # Explicit 0 or an empty value selects the CPU fallback for diagnostics.
-for option in RCLOL_GPU_DIRECT_PRESENT RCLOL_GPU_DIRECT_ASYNC RCLOL_GPU_DIRECT_VSYNC DARLING_CA_PRESENT_AT_COMMIT DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER RCLOL_FORWARD_MOUSE_MOVED RCLOL_MOUSE_CONFINEMENT; do
+# DARLING_METAL_MAC_GPU_NAME reports the MacBookPro16,1 GPU of the host vendor (AMD or Intel) as
+# MTLDevice.name, matching the model IOKit reports; memory figures stay the host's.
+for option in RCLOL_GPU_DIRECT_PRESENT RCLOL_GPU_DIRECT_ASYNC RCLOL_GPU_DIRECT_VSYNC DARLING_CA_PRESENT_AT_COMMIT DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER RCLOL_FORWARD_MOUSE_MOVED RCLOL_MOUSE_CONFINEMENT DARLING_METAL_MAC_GPU_NAME; do
  eval 'value=${'"$option"'-1}'
  case "$value" in 0|'') unset "$option";; *) export "$option=$value";; esac
 done
-prefix=${prefix_dir:-${DPREFIX:-$HOME/.darling}}
-guest_home="${guest_home:-@GUEST_HOME@}"
+prefix=$prefix_dir
+# RIOT_GUEST_HOME is host-side; DYLD paths must be relative to the guest root.
 case "$guest_home" in
  "$prefix"/*) guest_path=/${guest_home#"$prefix"/} ;;
- *) guest_path="$guest_home" ;;
+ *) echo "RIOT_GUEST_HOME must be inside DPREFIX" >&2; exit 1 ;;
 esac
 # The first-time installer puts the client in /Users/Shared/Riot Games and then
 # hands off through LaunchServices, which does not start it under Darling. Link
@@ -160,30 +103,19 @@ export __GL_YIELD="${__GL_YIELD:-NOTHING}"
 if [ -w /proc/self/timerslack_ns ]; then
   echo 1 > /proc/self/timerslack_ns 2>/dev/null || true
 fi
-
-# Sanitize and harden environment before guest launch:
-# Strip Linux-specific host variables (WAYLAND_DISPLAY, XDG_*, MESA_*, DRI_*, ROCM_*,
-# session variables, desktop/audio/toolkit leaks) so the guest receives a pure macOS environment.
-sanitize_host_environment
-
-# Ensure all host file descriptors > 2 are closed immediately prior to guest exec.
-close_inherited_fds
-
-exec env \
-  -u ELECTRON_RUN_AS_NODE \
-  -u DYLD_INSERT_LIBRARIES \
-  EGL_PLATFORM=x11 \
+# On affected setups Chromium's default temp directory is unusable. Electron
+# can copy app.asar entries to temporary files for async reads and report a
+# failed copy as "not found". Use a writable guest directory by default.
+# exec-guest.py closes host file descriptors above stderr before starting the guest. A shell
+# loop cannot: dash only accepts single-digit descriptors in redirections.
+exec python3 "$runner_dir/exec-guest.py" env -u ELECTRON_RUN_AS_NODE -u DYLD_INSERT_LIBRARIES EGL_PLATFORM=x11 \
   MAC_CHROMIUM_TMPDIR="${MAC_CHROMIUM_TMPDIR:-/private/tmp}" \
-  LANG="${RCLOL_GUEST_LOCALE:-en_US.UTF-8}" \
-  LC_ALL="${RCLOL_GUEST_LOCALE:-en_US.UTF-8}" \
-  SHELL="/bin/zsh" \
-  XMODIFIERS="${RCLOL_XMODIFIERS:-@im=none}" \
-  DISPLAY="${DISPLAY:-:1}" \
+  LANG="${RCLOL_GUEST_LOCALE:-en_US.UTF-8}" LC_ALL="${RCLOL_GUEST_LOCALE:-en_US.UTF-8}" \
+  mesa_glthread="${RCLOL_MESA_GLTHREAD-${mesa_glthread-false}}" \
+  XMODIFIERS="${RCLOL_XMODIFIERS:-@im=none}" DISPLAY="${DISPLAY:-:1}" \
   DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:-$guest_path/RuntimeLibraries}" \
   DYLD_FRAMEWORK_PATH="${DYLD_FRAMEWORK_PATH:-$guest_path/RuntimeFrameworks}" \
   DARLING_XSHM_LIBRARY="${DARLING_XSHM_LIBRARY:-$guest_path/libDarlingXShm.dylib}" \
-  __CF_USER_TEXT_ENCODING="0x1F5:0x0:0x0" \
-  APPLE_SUPPRESS_X11_THEMING=1 \
   darling "$A" --region="${RCLOL_REGION:-EUW}" --locale="${RCLOL_LOCALE:-en_GB}" \
     "$@" \
     --log-dir="$guest_path/Library/Logs/Riot Games/Riot Client"

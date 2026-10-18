@@ -1,8 +1,10 @@
 #!/bin/sh
-# system_profiler for the Darling prefix: reports the emulated Mac SMBIOS
-# hardware/software overview and the host's real display and network hardware.
+# system_profiler for the Darling prefix: reports the host's real display and
+# network hardware for the data types applications query at startup. The hardware
+# and software overviews come from the guest's own IOKit, sysctl and sw_vers, so they
+# match what other APIs report (including a configure-darling-platform.py override).
 # Installed as /usr/sbin/system_profiler by tools/install-darling-system-profiler.py.
-host="${DARLING_SYSTEM_ROOT:-/Volumes/SystemRoot}"
+host=/Volumes/SystemRoot
 xml=0
 types=
 while [ $# -gt 0 ]; do
@@ -15,47 +17,6 @@ while [ $# -gt 0 ]; do
  shift
 done
 [ -n "$types" ] || types=" SPHardwareDataType SPSoftwareDataType SPDisplaysDataType SPEthernetDataType SPAirPortDataType"
-
-SMBIOS_MODEL="MacBookPro16,1"
-SMBIOS_MACHINE_NAME="MacBook Pro"
-SMBIOS_SERIAL_NUMBER=""
-SMBIOS_PLATFORM_UUID=""
-SMBIOS_PROVISIONING_UDID=""
-SMBIOS_BOOT_ROM_VERSION="2020.41.1.0.0 (iBridge: 21.16.1069.0.0,0)"
-SMBIOS_SMC_VERSION="2.58f15"
-SMBIOS_CPU_TYPE="8-Core Intel Core i9"
-SMBIOS_CPU_SPEED="2.4 GHz"
-SMBIOS_PACKAGES="1"
-SMBIOS_CORES="8"
-SMBIOS_MEMORY="16 GB"
-
-for smbios_conf in "${DARLING_SMBIOS_CONF:-}" "/private/etc/darling-smbios.conf" "/etc/darling-smbios.conf"; do
- [ -n "$smbios_conf" ] && [ -r "$smbios_conf" ] || continue
- while IFS='=' read -r key val || [ -n "$key" ]; do
-  case "$key" in
-   ''|'#'*) continue ;;
-  esac
-  val="${val#\"}"
-  val="${val%\"}"
-  val="${val#\'}"
-  val="${val%\'}"
-  case "$key" in
-   SMBIOS_MODEL) [ -n "$val" ] && SMBIOS_MODEL="$val" ;;
-   SMBIOS_MACHINE_NAME) [ -n "$val" ] && SMBIOS_MACHINE_NAME="$val" ;;
-   SMBIOS_SERIAL_NUMBER) [ -n "$val" ] && SMBIOS_SERIAL_NUMBER="$val" ;;
-   SMBIOS_PLATFORM_UUID) [ -n "$val" ] && SMBIOS_PLATFORM_UUID="$val" ;;
-   SMBIOS_PROVISIONING_UDID) [ -n "$val" ] && SMBIOS_PROVISIONING_UDID="$val" ;;
-   SMBIOS_BOOT_ROM_VERSION) [ -n "$val" ] && SMBIOS_BOOT_ROM_VERSION="$val" ;;
-   SMBIOS_SMC_VERSION) [ -n "$val" ] && SMBIOS_SMC_VERSION="$val" ;;
-   SMBIOS_CPU_TYPE) [ -n "$val" ] && SMBIOS_CPU_TYPE="$val" ;;
-   SMBIOS_CPU_SPEED) [ -n "$val" ] && SMBIOS_CPU_SPEED="$val" ;;
-   SMBIOS_PACKAGES) [ -n "$val" ] && SMBIOS_PACKAGES="$val" ;;
-   SMBIOS_CORES) [ -n "$val" ] && SMBIOS_CORES="$val" ;;
-   SMBIOS_MEMORY) [ -n "$val" ] && SMBIOS_MEMORY="$val" ;;
-  esac
- done < "$smbios_conf"
- break
-done
 
 escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
@@ -87,6 +48,80 @@ displays() { # one line per GPU: vendor|device|vram MB or empty|name
  done
 }
 
+load_platform() { # IOPlatformExpertDevice string properties, "key|value" per line
+ # String values print as "value", NUL-terminated data as <"value">; other data is skipped.
+ platform_properties=$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null |
+  sed -n 's/^[ |]*"\([^"]*\)" = <\{0,1\}"\(.*\)">\{0,1\}$/\1|\2/p')
+}
+platform() {
+ printf '%s\n' "$platform_properties" | awk -v key="$1" 'index($0, key "|") == 1 { print substr($0, length(key) + 2); exit }'
+}
+
+machine_name() { # model identifier -> marketing family, as in About This Mac
+ case "$1" in
+  MacBookPro*) echo 'MacBook Pro';; MacBookAir*) echo 'MacBook Air';; MacBook*) echo 'MacBook';;
+  iMacPro*) echo 'iMac Pro';; iMac*) echo 'iMac';; Macmini*) echo 'Mac mini';; MacPro*) echo 'Mac Pro';;
+  *) echo 'Mac';;
+ esac
+}
+
+hardware() { # label|xml key|xml type|value for each known field
+ load_platform
+ model=$(platform model)
+ cores=$(sysctl -n hw.physicalcpu 2>/dev/null)
+ memory=$(sysctl -n hw.memsize 2>/dev/null | awk '$1 > 0 { printf "%d GB", $1 / 1073741824 + 0.5 }')
+ speed=$(sysctl -n hw.cpufrequency 2>/dev/null | awk '$1 > 0 { printf "%.1f GHz", $1 / 1e9 }')
+ l2=$(sysctl -n hw.l2cachesize 2>/dev/null | awk '$1 > 0 { printf "%d KB", $1 / 1024 }')
+ l3=$(sysctl -n hw.l3cachesize 2>/dev/null | awk '$1 > 0 { printf "%d MB", $1 / 1048576 }')
+ echo "Model Name|machine_name|string|${model:+$(machine_name "$model")}"
+ echo "Model Identifier|machine_model|string|$model"
+ echo "Processor Name|cpu_type|string|$(sysctl -n machdep.cpu.brand_string 2>/dev/null)"
+ echo "Processor Speed|current_processor_speed|string|$speed"
+ echo "Number of Processors|packages|integer|$(sysctl -n hw.packages 2>/dev/null)"
+ echo "Total Number of Cores|number_processors|integer|$cores"
+ echo "L2 Cache (per Core)|l2_cache_core|string|$l2"
+ echo "L3 Cache|l3_cache|string|$l3"
+ echo "Memory|physical_memory|string|$memory"
+ echo "Serial Number (system)|serial_number|string|$(platform IOPlatformSerialNumber)"
+ echo "Hardware UUID|platform_UUID|string|$(platform IOPlatformUUID)"
+ echo "Provisioning UDID|provisioning_UDID|string|$(platform provisioning_UDID)"
+}
+
+software() {
+ name=$(sw_vers -productName 2>/dev/null); version=$(sw_vers -productVersion 2>/dev/null)
+ build=$(sw_vers -buildVersion 2>/dev/null)
+ echo "System Version|os_version|string|${version:+${name:-macOS} $version${build:+ ($build)}}"
+ echo "Kernel Version|kernel_version|string|$(uname -sr 2>/dev/null)"
+ echo "Boot Volume|boot_volume|string|Macintosh HD"
+ echo "Boot Mode|boot_mode|string|normal_boot"
+ echo "Computer Name|local_host_name|string|$(hostname -s 2>/dev/null)"
+ echo "User Name|user_name|string|${USER:-$(id -un 2>/dev/null)}"
+}
+
+overview_xml() { # $1 = _name; fields on stdin; empty values are omitted
+ echo '   <dict>'
+ echo "    <key>_name</key><string>$1</string>"
+ while IFS='|' read -r label key kind value; do
+  [ -n "$value" ] || continue
+  if [ "$kind" = integer ]; then
+   case "$value" in *[!0-9]*) continue;; esac
+   echo "    <key>$key</key><integer>$value</integer>"
+  else
+   echo "    <key>$key</key><string>$(printf '%s' "$value" | escape)</string>"
+  fi
+ done
+ echo '   </dict>'
+}
+
+overview_text() { # $1 = section title, $2 = overview title; fields on stdin
+ printf '%s:\n\n    %s:\n\n' "$1" "$2"
+ while IFS='|' read -r label key kind value; do
+  [ "$key" != boot_mode ] || value=Normal
+  [ -z "$value" ] || printf '      %s: %s\n' "$label" "$value"
+ done
+ echo
+}
+
 interfaces() { # $1 = wired|wireless; physical host interfaces only
  for path in "$host"/sys/class/net/*; do
   [ -e "$path/device" ] || continue
@@ -106,47 +141,8 @@ if [ "$xml" = 1 ]; then
   echo '  <key>_items</key>'
   echo '  <array>'
   case "$type" in
-   SPHardwareDataType)
-    esc_model=$(printf '%s' "$SMBIOS_MODEL" | escape)
-    esc_machine=$(printf '%s' "$SMBIOS_MACHINE_NAME" | escape)
-    esc_cpu=$(printf '%s' "$SMBIOS_CPU_TYPE" | escape)
-    esc_speed=$(printf '%s' "$SMBIOS_CPU_SPEED" | escape)
-    esc_mem=$(printf '%s' "$SMBIOS_MEMORY" | escape)
-    esc_rom=$(printf '%s' "$SMBIOS_BOOT_ROM_VERSION" | escape)
-    esc_smc=$(printf '%s' "$SMBIOS_SMC_VERSION" | escape)
-    esc_serial=$(printf '%s' "$SMBIOS_SERIAL_NUMBER" | escape)
-    esc_uuid=$(printf '%s' "$SMBIOS_PLATFORM_UUID" | escape)
-    esc_udid=$(printf '%s' "$SMBIOS_PROVISIONING_UDID" | escape)
-    echo '   <dict>'
-    echo '    <key>_name</key><string>hardware_overview</string>'
-    echo "    <key>boot_rom_version</key><string>$esc_rom</string>"
-    echo "    <key>cpu_type</key><string>$esc_cpu</string>"
-    echo "    <key>current_processor_speed</key><string>$esc_speed</string>"
-    echo '    <key>l2_cache_core</key><string>256 KB</string>'
-    echo '    <key>l3_cache</key><string>16 MB</string>'
-    echo "    <key>machine_model</key><string>$esc_model</string>"
-    echo "    <key>machine_name</key><string>$esc_machine</string>"
-    echo "    <key>number_processors</key><integer>$SMBIOS_CORES</integer>"
-    echo "    <key>packages</key><integer>$SMBIOS_PACKAGES</integer>"
-    echo "    <key>physical_memory</key><string>$esc_mem</string>"
-    echo "    <key>platform_UUID</key><string>$esc_uuid</string>"
-    echo "    <key>provisioning_UDID</key><string>$esc_udid</string>"
-    echo "    <key>serial_number</key><string>$esc_serial</string>"
-    echo "    <key>SMC_version_system</key><string>$esc_smc</string>"
-    echo '   </dict>';;
-   SPSoftwareDataType)
-    esc_user=$(printf '%s' "${USER:-root}" | escape)
-    echo '   <dict>'
-    echo '    <key>_name</key><string>os_overview</string>'
-    echo '    <key>boot_mode</key><string>normal_boot</string>'
-    echo '    <key>boot_volume</key><string>Macintosh HD</string>'
-    echo '    <key>kernel_version</key><string>Darwin 23.6.0</string>'
-    echo '    <key>local_host_name</key><string>MacBook-Pro</string>'
-    echo '    <key>os_version</key><string>macOS 14.7 (23H124)</string>'
-    echo '    <key>secure_vm</key><string>secure_vm_enabled</string>'
-    echo '    <key>system_integrity</key><string>integrity_enabled</string>'
-    echo "    <key>user_name</key><string>$esc_user</string>"
-    echo '   </dict>';;
+   SPHardwareDataType) hardware | overview_xml hardware_overview;;
+   SPSoftwareDataType) software | overview_xml os_overview;;
    SPDisplaysDataType)
     displays | while IFS='|' read -r vendor device vram name; do
      name=$(printf '%s' "$name" | escape)
@@ -190,35 +186,8 @@ fi
 
 for type in $types; do
  case "$type" in
-  SPHardwareDataType)
-   printf 'Hardware:\n\n    Hardware Overview:\n\n'
-   printf '      Model Name: %s\n' "$SMBIOS_MACHINE_NAME"
-   printf '      Model Identifier: %s\n' "$SMBIOS_MODEL"
-   printf '      Processor Name: %s\n' "$SMBIOS_CPU_TYPE"
-   printf '      Processor Speed: %s\n' "$SMBIOS_CPU_SPEED"
-   printf '      Number of Processors: %s\n' "$SMBIOS_PACKAGES"
-   printf '      Total Number of Cores: %s\n' "$SMBIOS_CORES"
-   printf '      L2 Cache (per Core): 256 KB\n'
-   printf '      L3 Cache: 16 MB\n'
-   printf '      Hyper-Threading Technology: Enabled\n'
-   printf '      Memory: %s\n' "$SMBIOS_MEMORY"
-   printf '      Boot ROM Version: %s\n' "$SMBIOS_BOOT_ROM_VERSION"
-   printf '      SMC Version (system): %s\n' "$SMBIOS_SMC_VERSION"
-   printf '      Serial Number (system): %s\n' "$SMBIOS_SERIAL_NUMBER"
-   printf '      Hardware UUID: %s\n' "$SMBIOS_PLATFORM_UUID"
-   printf '      Provisioning UDID: %s\n\n' "$SMBIOS_PROVISIONING_UDID"
-   ;;
-  SPSoftwareDataType)
-   printf 'Software:\n\n    System Software Overview:\n\n'
-   printf '      System Version: macOS 14.7 (23H124)\n'
-   printf '      Kernel Version: Darwin 23.6.0\n'
-   printf '      Boot Volume: Macintosh HD\n'
-   printf '      Boot Mode: Normal\n'
-   printf '      Computer Name: MacBook-Pro\n'
-   printf '      User Name: %s\n' "${USER:-root}"
-   printf '      Secure Virtual Memory: Enabled\n'
-   printf '      System Integrity Protection: Enabled\n\n'
-   ;;
+  SPHardwareDataType) hardware | overview_text Hardware 'Hardware Overview';;
+  SPSoftwareDataType) software | overview_text Software 'System Software Overview';;
   SPDisplaysDataType)
    printf 'Graphics/Displays:\n\n'
    displays | while IFS='|' read -r vendor device vram name; do
