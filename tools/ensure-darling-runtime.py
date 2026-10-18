@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Clear a dead Darling server's stale PID marker, and stale shared buffers once no server runs."""
+import json
 import os
 from pathlib import Path
 import signal
@@ -170,7 +171,20 @@ def ensure_prefix_smbios(prefix):
         if created:
             print(f"Provisioned Darling SMBIOS ({cfg['SMBIOS_MODEL']} {cfg['SMBIOS_SERIAL_NUMBER']})", flush=True)
 
+def resolve_guest_user():
+    config_file = Path(__file__).resolve().parent.parent / 'build/config.json'
+    if config_file.is_file():
+        try:
+            cfg = json.loads(config_file.read_text())
+            if cfg.get('guest_user'):
+                return cfg['guest_user']
+        except Exception:
+            pass
+    return os.environ.get('GUEST_USER') or os.environ.get('USER') or Path.home().name
+
 def ensure_guest_xauthority(prefix):
+    if not (prefix / 'private/etc').is_dir():
+        return
     auth_src = os.environ.get('XAUTHORITY')
     candidates = []
     if auth_src:
@@ -184,7 +198,8 @@ def ensure_guest_xauthority(prefix):
         except OSError:
             pass
 
-    target = prefix / 'Users' / Path.home().name / '.Xauthority'
+    guest_user = resolve_guest_user()
+    target = prefix / 'Users' / guest_user / '.Xauthority'
     for src in candidates:
         if src.is_file() and os.access(src, os.R_OK):
             try:
