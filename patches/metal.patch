@@ -3725,8 +3725,8 @@ index cde968d..aa7fe05 100644
 +    if (index >= 31) [NSException raise:NSRangeException format:@"Vertex descriptor index %lu exceeds 30", (unsigned long)index];
 +    MTLVertexBufferLayoutDescriptor* old = _items[index];
 +    _items[index] = [descriptor retain];
-+    [old release];
 +    MTLVertexBufferLayoutArrayRetireItem(self, old);
++    [old release];
 +    const uint32_t bit = 1u << index;
 +    if (descriptor) _present |= bit; else _present &= ~bit;
 +    if (descriptor && object_getClass(descriptor) == [MTLVertexBufferLayoutDescriptor class]) _concrete |= bit; else _concrete &= ~bit;
@@ -3787,8 +3787,8 @@ index cde968d..aa7fe05 100644
 +    if (index >= 31) [NSException raise:NSRangeException format:@"Vertex descriptor index %lu exceeds 30", (unsigned long)index];
 +    MTLVertexAttributeDescriptor* old = _items[index];
 +    _items[index] = [descriptor retain];
-+    [old release];
 +    MTLVertexAttributeArrayRetireItem(self, old);
++    [old release];
 +    const uint32_t bit = 1u << index;
 +    if (descriptor) _present |= bit; else _present &= ~bit;
 +    if (descriptor && object_getClass(descriptor) == [MTLVertexAttributeDescriptor class]) _concrete |= bit; else _concrete &= ~bit;

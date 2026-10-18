@@ -195,7 +195,7 @@ def test_live_darling_iokit_and_sysctl(mod):
             raw_lines = out_f.read().decode("utf-8", errors="replace").splitlines()
             line = next((l[l.index("SMBIOS_IOKIT"):] for l in raw_lines if "SMBIOS_IOKIT" in l), "\n".join(raw_lines))
         if res.returncode != 0:
-            return f"SKIP (live darling returned exit code {res.returncode}: {line.strip()})"
+            raise AssertionError(f"live IOKit check failed (exit {res.returncode}): {line.strip()}")
         assert f"serial={cfg['SMBIOS_SERIAL_NUMBER']}" in line, f"Expected serial {cfg['SMBIOS_SERIAL_NUMBER']} in {line}"
         assert f"uuid={cfg['SMBIOS_PLATFORM_UUID']}" in line, f"Expected uuid {cfg['SMBIOS_PLATFORM_UUID']} in {line}"
         assert "vendor=GenuineIntel" in line, f"Expected GenuineIntel in {line}"
@@ -213,7 +213,7 @@ def test_live_darling_iokit_and_sysctl(mod):
         assert sp_data["serial_number"] == cfg["SMBIOS_SERIAL_NUMBER"]
         assert sp_data["platform_UUID"] == cfg["SMBIOS_PLATFORM_UUID"]
         return line
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         return f"SKIP ({exc})"
     finally:
         subprocess.run([sys.executable, str(stop_script)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

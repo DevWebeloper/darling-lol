@@ -331,27 +331,6 @@ def write_config_to_prefix(prefix: Path, cfg: dict[str, str]) -> Path:
         etc_staged.chmod(0o644)
         os.replace(etc_staged, etc_target)
 
-    # Also ensure CoreServices/SystemVersion.plist in the prefix overlay does not expose "Darling" or "Lubos Dolezel"
-    coreservices = prefix / "System/Library/CoreServices"
-    coreservices.mkdir(parents=True, exist_ok=True)
-    for plist_name, prod_name, prod_ver in (
-        ("SystemVersion.plist", "macOS", "14.7"),
-        ("SystemVersionCompat.plist", "Mac OS X", "10.16"),
-    ):
-        plist_target = coreservices / plist_name
-        plist_staged = coreservices / f".{plist_name}.tmp-{os.getpid()}"
-        plist_bytes = plistlib.dumps({
-            "ProductBuildVersion": "23H124",
-            "ProductCopyright": "1983-2024 Apple Inc.",
-            "ProductName": prod_name,
-            "ProductUserVisibleVersion": prod_ver,
-            "ProductVersion": prod_ver,
-            "iOSSupportVersion": "14.7",
-        })
-        plist_staged.write_bytes(plist_bytes)
-        plist_staged.chmod(0o644)
-        os.replace(plist_staged, plist_target)
-
     return target
 
 
@@ -380,9 +359,9 @@ def import_gensmbios_file(source_path: Path, default_model: str = "MacBookPro16,
         or generic.get("model")
         or default_model
     )
-    cfg = generate_identity(model_name if model_name in MODELS else default_model)
-    cfg["SMBIOS_MODEL"] = str(model_name)
-    cfg["SMBIOS_PRODUCT_NAME"] = str(model_name)
+    if model_name not in MODELS:
+        raise ValueError(f"Unsupported model {model_name!r} in {source_path}; choose from {', '.join(MODELS)}")
+    cfg = generate_identity(model_name)
 
     serial = generic.get("SystemSerialNumber") or generic.get("Serial") or generic.get("SMBIOS_SERIAL_NUMBER")
     mlb = generic.get("MLB") or generic.get("Board Serial") or generic.get("SMBIOS_MLB")
@@ -404,20 +383,19 @@ def import_gensmbios_file(source_path: Path, default_model: str = "MacBookPro16,
         clean_rom = rom.strip().replace(":", "").replace("-", "").upper()
         if len(clean_rom) == 12:
             cfg["SMBIOS_ROM"] = clean_rom
+    if not is_valid_config(cfg):
+        raise ValueError(f"Imported SMBIOS identity from {source_path} is invalid and would be regenerated on next start")
     return cfg
 
 
 def ensure_smbios(prefix: Path, model_name: str = "MacBookPro16,1", regenerate: bool = False) -> tuple[dict[str, str], bool]:
     conf_path = prefix / "private/etc/darling-smbios.conf"
-    sysver_path = prefix / "System/Library/CoreServices/SystemVersion.plist"
     if not regenerate:
         existing = read_config(conf_path)
         if is_valid_config(existing):
             etc_dir = prefix / "etc"
             need_sync = (
-                (etc_dir.is_dir() and not etc_dir.is_symlink() and not (etc_dir / "darling-smbios.conf").is_file())
-                or not sysver_path.is_file()
-                or b"Darling" in sysver_path.read_bytes()
+                etc_dir.is_dir() and not etc_dir.is_symlink() and not (etc_dir / "darling-smbios.conf").is_file()
             )
             if need_sync:
                 write_config_to_prefix(prefix, existing)
