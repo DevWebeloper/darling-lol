@@ -24,12 +24,6 @@ index 431f29a..eb3eec8 100644
  endif()
  
  #
-diff --git a/deps/indium b/deps/indium
---- a/deps/indium
-+++ b/deps/indium
-@@ -1 +1 @@
--Subproject commit 8423a7d2f053167030d2bc4a227f96243c740667
-+Subproject commit 8423a7d2f053167030d2bc4a227f96243c740667-dirty
 diff --git a/include/Metal/MTLArgument.h b/include/Metal/MTLArgument.h
 new file mode 100644
 index 0000000..60120d6
@@ -764,10 +758,10 @@ index 0a620b2..79cf40a 100644
  #endif // _METAL_MTLBUFFERINTERNAL_H_
 diff --git a/private-include/Metal/MTLDepthStencilInternal.h b/private-include/Metal/MTLDepthStencilInternal.h
 new file mode 100644
-index 0000000..3c239ff
+index 0000000..0a7136c
 --- /dev/null
 +++ b/private-include/Metal/MTLDepthStencilInternal.h
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,27 @@
 +// SPDX-FileCopyrightText: 2026 Darling Developers
 +// SPDX-License-Identifier: MPL-2.0
 +
@@ -789,8 +783,10 @@ index 0000000..3c239ff
 +- (instancetype)initWithState:(std::shared_ptr<Indium::DepthStencilState>)state device:(id<MTLDevice>)device label:(NSString*)label;
 +#endif
 +@end
++#if DARLING_METAL_ENABLED
 +// Direct access for the encoders: the property getter is a message send that returns the shared_ptr by value.
 +const std::shared_ptr<Indium::DepthStencilState>& MTLDepthStencilGetIndium(id object);
++#endif
 +
 +#endif
 diff --git a/private-include/Metal/MTLDeviceInfo.h b/private-include/Metal/MTLDeviceInfo.h
@@ -1836,7 +1832,7 @@ index 2a57796..0cbedf2 100644
 -
  @end
 diff --git a/src/Metal/MTLDevice.mm b/src/Metal/MTLDevice.mm
-index f58184a..fd06484 100644
+index f58184a..d7dfb6f 100644
 --- a/src/Metal/MTLDevice.mm
 +++ b/src/Metal/MTLDevice.mm
 @@ -2,14 +2,32 @@
@@ -2115,7 +2111,7 @@ index f58184a..fd06484 100644
  	if (!pso) {
  		if (error) {
  			// TODO: better error and/or match what the official Metal method does
-@@ -205,7 +386,114 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
+@@ -205,7 +386,118 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
  		}
  		return nil;
  	}
@@ -2163,7 +2159,9 @@ index f58184a..fd06484 100644
 +- (id<MTLDepthStencilState>)newDepthStencilStateWithDescriptor:(MTLDepthStencilDescriptor*)descriptor
 +{
 +    if (!descriptor) return nil;
-+    auto state = _device->newDepthStencilState([descriptor asIndiumDescriptor]);
++    std::shared_ptr<Indium::DepthStencilState> state;
++    try { state = _device->newDepthStencilState([descriptor asIndiumDescriptor]); }
++    catch (...) { return nil; }
 +    if (!state) return nil;
 +    return [[MTLDepthStencilStateInternal alloc] initWithState:state device:self label:descriptor.label];
 +}
@@ -2185,7 +2183,9 @@ index f58184a..fd06484 100644
 +    desc.lodMaxClamp = descriptor.lodMaxClamp;
 +    desc.supportArgumentBuffers = descriptor.supportArgumentBuffers;
 +    desc.compareFunction = static_cast<Indium::CompareFunction>(descriptor.compareFunction);
-+    auto sampler = _device->newSamplerState(desc);
++    std::shared_ptr<Indium::SamplerState> sampler;
++    try { sampler = _device->newSamplerState(desc); }
++    catch (...) { return nil; }
 +    if (!sampler) return nil;
 +    return [[MTLSamplerStateInternal alloc] initWithSampler:sampler device:self label:descriptor.label];
 +}
@@ -2231,7 +2231,7 @@ index f58184a..fd06484 100644
  }
  
  - (id<MTLCommandQueue>)newCommandQueue
-@@ -275,8 +563,21 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
+@@ -275,8 +567,21 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
  - (id<MTLLibrary>)newLibraryWithData: (dispatch_data_t)data
                                 error: (NSError**)error
  {
@@ -3291,7 +3291,7 @@ index 66a9056..f28235c 100644
 -
  @end
 diff --git a/src/Metal/MTLTexture.mm b/src/Metal/MTLTexture.mm
-index 6c71fb9..822c112 100644
+index 6c71fb9..186b8c0 100644
 --- a/src/Metal/MTLTexture.mm
 +++ b/src/Metal/MTLTexture.mm
 @@ -1,3 +1,5 @@
@@ -3300,7 +3300,7 @@ index 6c71fb9..822c112 100644
  // SPDX-FileCopyrightText: 2026 Darling Developers
  // SPDX-License-Identifier: MPL-2.0
  
-@@ -7,11 +9,37 @@
+@@ -7,11 +9,38 @@
  #import <Metal/MTLPixelFormatInternal.h>
  #import <Metal/MTLTypesInternal.h>
  
@@ -3316,7 +3316,8 @@ index 6c71fb9..822c112 100644
 +		if (FILE* log = fopen("/tmp/metal-trace.log", "a")) {
 +			const unsigned char* b = (const unsigned char*) bytes;
 +			unsigned long nonZero = 0;
-+			size_t probe = std::min<size_t>(4096, (size_t) region.size.width * 4);
++			// Every pixel format takes at least one byte per pixel, so the first `width` bytes lie inside the first row.
++			size_t probe = std::min<size_t>(4096, (size_t) region.size.width);
 +			for (size_t i = 0; i < probe; ++i) if (b[i]) ++nonZero;
 +			fprintf(log, "replaceRegion tex=%p %lux%lu fmt=%lu level=%lu region=(%lu,%lu %lux%lu) firstBytesNonZero=%lu/%zu took=%.1fms\n", texture,
 +				(unsigned long) texture.width, (unsigned long) texture.height, (unsigned long) texture.pixelFormat, (unsigned long) level,
@@ -3338,7 +3339,7 @@ index 6c71fb9..822c112 100644
  @synthesize device = _device;
  @synthesize resourceOptions = _resourceOptions;
  @synthesize label = _label;
-@@ -164,7 +192,9 @@
+@@ -164,7 +193,9 @@
              withBytes: (const void*)pixelBytes
            bytesPerRow: (NSUInteger)bytesPerRow
  {
@@ -3348,7 +3349,7 @@ index 6c71fb9..822c112 100644
  }
  
  - (void)replaceRegion: (MTLRegion)region
-@@ -174,7 +204,9 @@
+@@ -174,7 +205,9 @@
            bytesPerRow: (NSUInteger)bytesPerRow
          bytesPerImage: (NSUInteger)bytesPerImage
  {
@@ -3446,7 +3447,7 @@ index 37cccb3..79b2350 100644
 -
  @end
 diff --git a/src/Metal/MTLVertexDescriptor.mm b/src/Metal/MTLVertexDescriptor.mm
-index cde968d..aa7fe05 100644
+index cde968d..0a016c6 100644
 --- a/src/Metal/MTLVertexDescriptor.mm
 +++ b/src/Metal/MTLVertexDescriptor.mm
 @@ -1,24 +1,435 @@
