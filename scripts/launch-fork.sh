@@ -10,6 +10,7 @@ REPO_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 FORK_BRANCH="${FORK_BRANCH:-feat/pr41-followups}"
 LOG_FILE="${LEAGUE_LOG:-/tmp/darling-lol-launch-fork.log}"
 export DISPLAY="${DISPLAY:-:0}"
+export RCLOL_FILTER_HOST_ENV="${RCLOL_FILTER_HOST_ENV:-1}"
 
 log() {
   local msg="$1"
