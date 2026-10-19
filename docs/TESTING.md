@@ -119,6 +119,96 @@ Expected: `CORETEXT_FONT_LIST pass=1` with nonzero family/face counts (306/1124 
 
 The font probe reproduces Chromium's installed-family enumeration, mandatory family matching and localized-name lookup with a null language output. It checks ownership of the single-match result and that a nonexistent mandatory family produces no substitute. The resize probe checks backing-layer bounds immediately after frame/bounds changes, including a scaled view and a child layer, without relying on input or coordinate conversion to refresh them. It also verifies that native parent size is current during child layout, and that adding an overlay sibling after the content view does not redirect subsequent content resizing into that overlay. The old sibling selection left content at 1600×900 while stretching the 30×20 overlay to 1280×720; the corrected layout resizes the content and preserves the overlay. Before the fixes, these checks report a stale 1280×720 layer and native parent after a 1600×900 resize. The `FRAME_SIZE_HOOK` check uses a subclass whose `setFrameSize:` publishes its viewport size. It checks growth and shrinkage through parent autoresizing, direct `setFrame:`, and direct `setFrameSize:`. Before component-setter dispatch was corrected only the final direct size setter reached the subclass (one callback); afterward all four updates do, with current geometry visible inside the callback. No probe launches or contacts Riot/League. The user confirmed that the language dropdown and League window resizing work after the final X11 correction (2026-10-15). The practice-tool crash remains unresolved.
 
+### Local event monitors and client dragging
+
+`python3 tools/build-riot-x11-runtime.py` builds
+`build/riot-event-monitors-check`. With patched AppKit installed and clients
+closed, run:
+
+```sh
+darling shell env DYLD_LIBRARY_PATH=/Users/me/RuntimeLibraries \
+  DYLD_FRAMEWORK_PATH=/Users/me/RuntimeFrameworks \
+  /Volumes/SystemRoot/path/to/darling-lol/build/riot-event-monitors-check
+```
+
+Expected: nine `PASS` lines and exit status 0. This independent probe tests
+multiple monitors, mask filtering, removal, consumption, event replacement,
+self-removal, and the in-flight snapshot when another monitor is removed.
+Monitor order is unspecified and is deliberately not asserted. It dispatches
+only synthetic events to its own unmapped window.
+The same source runs against native macOS AppKit:
+
+```sh
+clang -fblocks -framework AppKit tools/riot-event-monitors-check.m \
+  -o /tmp/riot-event-monitors-check
+/tmp/riot-event-monitors-check
+```
+
+Native reference: macOS 26.6.2. LeagueClientUx uses local
+monitors for custom window movement; intercepting a fixed titlebar strip instead
+would bypass its own drag policy and risk stealing its window-control clicks.
+For a live regression check, drag its header, drag ordinary content (which must
+not move the window), minimize and restore it, and check Riot Client header
+dragging separately. No match is required.
+
+### X11 window decorations
+
+`python3 tools/build-riot-x11-runtime.py` also builds
+`build/riot-window-decorations-check`. Install and activate both the patched
+AppKit and X11 backend before running it, with clients and the game closed:
+
+```sh
+darling shell env DYLD_LIBRARY_PATH=/Users/me/RuntimeLibraries \
+  DYLD_FRAMEWORK_PATH=/Users/me/RuntimeFrameworks \
+  /Volumes/SystemRoot/path/to/darling-lol/build/riot-window-decorations-check
+```
+
+Expected: `WINDOW_DECORATIONS_CHECK cases=10 pass=1`. The independent Cocoa
+probe reads `_MOTIF_WM_HINTS` on its own unmapped native windows. It covers a
+normal titled window, hidden title alone, hidden plus transparent titlebar,
+both reverse transitions, untitled masks with additional flags, switching to
+borderless after creation, native-window recreation, and properties set before
+the native window exists. It sends no input, maps no windows and does not
+launch or contact Riot/League. Check the success marker, not only the launcher
+exit status: some Darling versions do not propagate a guest assertion failure.
+
+Before the fix the hidden/transparent case fails. With the corrected overlays,
+the ten cases passed on KDE Wayland/Xwayland. Passive inspection of the reopened
+Riot Client also confirmed the no-decoration hint and identical compositor frame
+and client dimensions (1536×864), instead of the previous 28-pixel titlebar.
+This validates the Riot Client window, not every LeagueClientUx or game mode.
+
+### NSOpenPanel Open/Cancel (issue #85)
+
+`python3 tools/build-riot-openpanel-check.py` builds
+`build/riot-openpanel-check`. Install the patched AppKit first, with clients and
+the game closed. The probe opens its own directory chooser in a fresh `/tmp`
+folder containing one subfolder and needs no Riot/League client:
+
+```sh
+P=/Volumes/SystemRoot/path/to/darling-lol/build/riot-openpanel-check
+E="env DYLD_LIBRARY_PATH=/Users/me/RuntimeLibraries DYLD_FRAMEWORK_PATH=/Users/me/RuntimeFrameworks"
+for m in cancel open-selected open-none; do darling shell $E $P --auto $m; done
+darling shell $E $P --interactive
+```
+
+Each `--auto` mode waits 1.5 s, then clicks the panel's own Cancel or Open
+button (selecting the subfolder first for `open-selected`), and checks that
+`runModal` returned, the result code and URL, and that the panel is gone. A
+15 s watchdog on a separate thread reports a hang. Expected, one line per mode:
+
+```
+OPENPANEL_CHECK mode=cancel result=PASS code=0 ...
+OPENPANEL_CHECK mode=open-selected result=PASS code=1 url=/tmp/openpanel-check.XXXXXX/subfolder ...
+OPENPANEL_CHECK mode=open-none result=PASS code=1 url=/tmp/openpanel-check.XXXXXX ...
+```
+
+A failure prints `result=FAIL ... problems=...` (`HANG` when `runModal` never
+returned) and exits non-zero. `--interactive` shows the panel for manual clicks
+and prints `OPENPANEL_CHECK mode=interactive result=RETURNED code=... url=...`
+once it closes. As with the other probes, check the printed line rather than
+only the launcher exit status.
+
 ### Presentation publisher handoff
 
 With clients closed, run `build/riot-client-resize-check --handoff` through Darling with the normal runtime overrides. This creates an owned window and two fixture frame slots. The live software owner first supplies a 1280×720 main frame, then switches to a 262×131 popup; another slot supplies the resized main frame without the software flag. The test samples its own window beyond the original frame extent and checks generation colors across growth and shrinkage. The old selector reports black at the 1600×900 sample; the correction passes all four sizes. Repeat with `RCLOL_XSHM=0` and with `DARLING_XSHM_LIBRARY` pointing to the normal transport to cover both paths. The fixtures remove their own frame slots on exit; they do not read client pixels or send input.
@@ -128,6 +218,12 @@ With clients closed, run `build/riot-client-resize-check --handoff` through Darl
 `python3 build/runtime/tools/build-riot-client-resize-check.py` builds an independent AppKit window and IOSurface publisher. With clients closed and a display at least 1600×900, run it with the same framework/library overrides and `DARLING_XSHM_LIBRARY=/Users/me/libDarlingXShm.dylib`, `DARLING_CA_PRESENT_AT_COMMIT=1`, `DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER=1`. The default mode publishes software pixels. For the GPU path add `--gpu` and set `RCLOL_GPU_DIRECT_PRESENT=1 RCLOL_GPU_DIRECT_ASYNC=1` in the guest environment.
 
 The probe cycles through 1280×720, 1600×900, 1024×576 and 1280×720. Each stage changes the frame color and samples its own X11 window near the bottom-right corner, beyond the original frame's extent when growing. It waits up to 2.5 seconds for presentation and prints `RESIZE_PIXEL ... pass=1` for every stage. This verifies presented pixels rather than only view properties. Success does not reproduce League's own resize callbacks; the reported League UI failure remains open, with the opt-in [geometry trace](TROUBLESHOOTING.md#language-dropdown-closes-riot-or-client-resize-leaves-a-clipped-ui) needed to locate the remaining mismatch.
+
+### X11 drag and drop
+
+`python3 build/runtime/tools/build-riot-x11-drag-check.py` builds an independent AppKit check for the in-process drag loop that the X11 backend uses (`-[NSWindow dragImage:at:offset:event:pasteboard:source:slideBack:]`). It needs the cocotron AppKit built with the drag-and-drop patch. With clients closed, run `build/riot-x11-drag-check` through Darling with the same framework/library overrides as the other probes. It opens its own source and destination windows, posts synthetic events to its own application queue, and does not inject X11 input or touch other clients.
+
+It prints `PASS` or `FAIL` for seven cases: a drop onto a destination without `prepareForDragOperation:` (the default must proceed), a drag ending outside any destination, Escape cancel, two drags back to back with a source lacking `pasteboardChangedOwner:`, main-queue blocks and run loop timers firing during the drag, a mouse-down reaching a view afterwards, and a destination view removed from its window mid-drag. Each drag must call `draggedImage:endedAt:operation:` exactly once. The process exits nonzero on any failure, and a case that makes no progress for 20 seconds is reported as a hang, which is the original failure mode. Success covers the AppKit drag loop only; it does not exercise Chromium's own drag source.
 
 ## Legacy operating-system version query
 
