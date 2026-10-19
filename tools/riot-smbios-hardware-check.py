@@ -173,22 +173,58 @@ def test_live_darling_iokit_and_sysctl(mod):
         "-o", str(guest_bin),
     ], check=True)
 
-    # Restart Darling so iokitd and launchd load the current prefix overlay binary and SMBIOS config
+    def is_server_or_game_running():
+        try:
+            for p in Path("/proc").iterdir():
+                if not p.name.isdigit():
+                    continue
+                try:
+                    status = p / "status"
+                    if status.is_file():
+                        try:
+                            state = next(line.split()[1] for line in status.read_text().splitlines() if line.startswith("State:"))
+                            if state == "Z":
+                                continue
+                        except (OSError, StopIteration):
+                            pass
+                    comm = (p / "comm").read_text().strip()
+                    if comm in ("darlingserver",):
+                        return True
+                    if comm in ("mldr", "CrBrowserMain", "CrGpuMain", "CrRendererMain", "CrUtilityMain", "LeagueofLegends", "RiotClientServices"):
+                        cmdline = (p / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", errors="replace")
+                        if any(k in cmdline for k in ("League", "Riot")):
+                            return True
+                except (OSError, PermissionError):
+                    continue
+        except Exception:
+            pass
+        return False
+
+    server_was_running = is_server_or_game_running()
     stop_script = Path(__file__).resolve().with_name("stop-darling-runtime.py")
     ensure_script = Path(__file__).resolve().with_name("ensure-darling-runtime.py")
-    subprocess.run([sys.executable, str(stop_script)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.run([sys.executable, str(ensure_script)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if not server_was_running:
+        subprocess.run([sys.executable, str(stop_script)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([sys.executable, str(ensure_script)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     guest_user = os.environ.get("GUEST_USER", getpass.getuser())
     guest_home = f"/Users/{guest_user}"
+    build_dir = str(ROOT / "build")
+    guest_dyld = f"/Volumes/SystemRoot{build_dir}:{guest_home}/RuntimeLibraries"
     guest_env = dict(
         os.environ,
-        DYLD_LIBRARY_PATH=f"{guest_home}/RuntimeLibraries",
+        DYLD_LIBRARY_PATH=guest_dyld,
         DYLD_FRAMEWORK_PATH=f"{guest_home}/RuntimeFrameworks",
     )
     try:
         with tempfile.TemporaryFile(mode="w+b") as out_f:
             res = subprocess.run(
-                ["darling", "shell", "/Volumes/SystemRoot" + str(guest_bin)],
+                [
+                    "darling", "shell", "env",
+                    f"DYLD_LIBRARY_PATH={guest_dyld}",
+                    f"DYLD_FRAMEWORK_PATH={guest_home}/RuntimeFrameworks",
+                    "/Volumes/SystemRoot" + str(guest_bin),
+                ],
                 env=guest_env, stdin=subprocess.DEVNULL, stdout=out_f, stderr=out_f, check=False,
             )
             out_f.seek(0)
@@ -203,7 +239,12 @@ def test_live_darling_iokit_and_sysctl(mod):
 
         with tempfile.TemporaryFile(mode="w+b") as sp_f, tempfile.TemporaryFile(mode="w+b") as err_f:
             subprocess.run(
-                ["darling", "shell", "/usr/sbin/system_profiler", "-xml", "SPHardwareDataType"],
+                [
+                    "darling", "shell", "env",
+                    f"DYLD_LIBRARY_PATH={guest_dyld}",
+                    f"DYLD_FRAMEWORK_PATH={guest_home}/RuntimeFrameworks",
+                    "/usr/sbin/system_profiler", "-xml", "SPHardwareDataType",
+                ],
                 env=guest_env, stdin=subprocess.DEVNULL, stdout=sp_f, stderr=err_f, check=True,
             )
             sp_f.seek(0)
@@ -216,7 +257,8 @@ def test_live_darling_iokit_and_sysctl(mod):
     except (OSError, subprocess.SubprocessError) as exc:
         return f"SKIP ({exc})"
     finally:
-        subprocess.run([sys.executable, str(stop_script)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not server_was_running:
+            subprocess.run([sys.executable, str(stop_script)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def main():

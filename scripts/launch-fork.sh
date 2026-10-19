@@ -11,6 +11,9 @@ FORK_BRANCH="${FORK_BRANCH:-feat/pr41-followups}"
 LOG_FILE="${LEAGUE_LOG:-/tmp/darling-lol-launch-fork.log}"
 export DISPLAY="${DISPLAY:-:0}"
 export RCLOL_FILTER_HOST_ENV="${RCLOL_FILTER_HOST_ENV:-1}"
+export DARLING_METAL_GPU_NAME="${DARLING_METAL_GPU_NAME:-AMD Radeon Pro 5500M}"
+export DARLING_METAL_MAC_GPU_NAME="${DARLING_METAL_MAC_GPU_NAME:-1}"
+export DARLING_METAL_VRAM_MB="${DARLING_METAL_VRAM_MB:-4096}"
 
 log() {
   local msg="$1"
@@ -102,7 +105,7 @@ fi
 
 # 4. Prevent disrupting an active match
 LEAGUE_GAME_PATTERN='LeagueofLegends\.app/Contents/MacOS/LeagueofLegends( |$)'
-if pgrep -f "$LEAGUE_GAME_PATTERN" >/dev/null 2>&1; then
+if pgrep -i -f "$LEAGUE_GAME_PATTERN" >/dev/null 2>&1; then
   log "Active League match already running; focusing window."
   if command -v xdotool >/dev/null 2>&1; then
     win="$(xdotool search --onlyvisible --class 'LeagueofLegends' 2>/dev/null | head -n 1 || true)"
@@ -183,13 +186,14 @@ else
   # Background focus watcher on desktop mode
   if [[ -z "${GAMESCOPE_WAYLAND_DISPLAY:-}" ]] && command -v xdotool >/dev/null 2>&1; then
     (
+      main_pid=$$
       i=0
-      while [ $i -lt 60 ] && ! pgrep -f '/Riot Client\.app/|/League of Legends\.app/|RiotClientServices' >/dev/null 2>&1; do
+      while [ $i -lt 60 ] && kill -0 "$main_pid" 2>/dev/null && ! pgrep -f '/Riot Client\.app/|/League of Legends\.app/|RiotClientServices' >/dev/null 2>&1; do
         sleep 1
         i=$((i+1))
       done
       last_win=""
-      while pgrep -f '/Riot Client\.app/|/League of Legends\.app/|RiotClientServices' >/dev/null 2>&1; do
+      while kill -0 "$main_pid" 2>/dev/null && pgrep -f '/Riot Client\.app/|/League of Legends\.app/|RiotClientServices' >/dev/null 2>&1; do
         win="$(xdotool search --onlyvisible --class '^LeagueofLegends$' 2>/dev/null | head -n 1 || true)"
         # X reuses window IDs across game matches; forget window ID once it is gone
         [[ -z "$win" ]] && last_win=""

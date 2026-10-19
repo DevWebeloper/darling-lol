@@ -42,6 +42,8 @@ for option in RCLOL_GPU_DIRECT_PRESENT RCLOL_GPU_DIRECT_ASYNC RCLOL_GPU_DIRECT_V
  eval 'value=${'"$option"'-1}'
  case "$value" in 0|'') unset "$option";; *) export "$option=$value";; esac
 done
+export DARLING_METAL_GPU_NAME="${DARLING_METAL_GPU_NAME:-AMD Radeon Pro 5500M}"
+export DARLING_METAL_VRAM_MB="${DARLING_METAL_VRAM_MB:-4096}"
 prefix=$prefix_dir
 # RIOT_GUEST_HOME is host-side; DYLD paths must be relative to the guest root.
 case "$guest_home" in

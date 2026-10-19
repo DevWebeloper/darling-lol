@@ -1134,7 +1134,7 @@ index 2a57796..0cbedf2 100644
 -
  @end
 diff --git a/src/Metal/MTLDevice.mm b/src/Metal/MTLDevice.mm
-index f58184a..2c45608 100644
+index f58184a..dcd5041 100644
 --- a/src/Metal/MTLDevice.mm
 +++ b/src/Metal/MTLDevice.mm
 @@ -2,14 +2,32 @@
@@ -1218,7 +1218,7 @@ index f58184a..2c45608 100644
  }
  
  @synthesize device = _device;
-@@ -116,6 +168,50 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
+@@ -116,6 +168,46 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
  	[_threadExitCondition unlock];
  }
  
@@ -1228,25 +1228,25 @@ index f58184a..2c45608 100644
 +	// Overrides are read once per process.
 +	static const char* const nameOverride = getenv("DARLING_METAL_GPU_NAME");
 +	static const uint64_t vramOverride = MTLDeviceInfo::parseMegabytes(getenv("DARLING_METAL_VRAM_MB"));
-+	static const bool macName = [] {
-+		const char* value = getenv("DARLING_METAL_MAC_GPU_NAME");
-+		return value && value[0] == '1' && value[1] == '\0';
++	static const bool useHost = [] {
++		const char* v = getenv("DARLING_METAL_USE_HOST_GPU");
++		return v && v[0] == '1' && v[1] == '\0';
 +	}();
 +
 +	auto priv = dynamic_cast<Indium::PrivateDevice*>(_device.get());
++	uint32_t vendorID = priv ? priv->properties().vendorID : 0;
 +	std::string vulkanName;
 +	try {
 +		vulkanName = _device ? _device->name() : "";
 +	} catch (...) {
 +		vulkanName = "";
 +	}
-+	const char* mac = macName && priv ? MTLDeviceInfo::macGpuName(priv->properties().vendorID) : nullptr;
-+	_name = [[NSString alloc] initWithUTF8String: MTLDeviceInfo::resolveName(nameOverride, vulkanName.c_str(), mac).c_str()];
++	_name = [[NSString alloc] initWithUTF8String: MTLDeviceInfo::resolveDeviceName(nameOverride, vulkanName.c_str(), useHost, vendorID).c_str()];
 +	if (_name == nil) {
 +		_name = [[NSString alloc] initWithUTF8String: MTLDeviceInfo::kFallbackName];
 +	}
 +
-+	uint64_t workingSet = 0;
++	uint64_t hostWorkingSet = 0;
 +	_sharesSystemMemory = NO;
 +	if (priv) {
 +		const VkPhysicalDeviceType type = priv->properties().deviceType;
@@ -1257,19 +1257,15 @@ index f58184a..2c45608 100644
 +		for (size_t i = 0; i < count; ++i) {
 +			heaps[i] = { memory.memoryHeaps[i].size, (memory.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0 };
 +		}
-+		workingSet = MTLDeviceInfo::workingSetBytes(heaps, count, _sharesSystemMemory);
++		hostWorkingSet = MTLDeviceInfo::workingSetBytes(heaps, count, _sharesSystemMemory);
 +	}
-+	if (vramOverride != 0) {
-+		workingSet = vramOverride;
-+	}
-+	// 1 GiB was the previous fixed value; keep it when Vulkan reports nothing usable.
-+	_workingSetSize = workingSet != 0 ? workingSet : (1ull << 30);
++	_workingSetSize = MTLDeviceInfo::resolveWorkingSetBytes(vramOverride, hostWorkingSet, useHost, vendorID);
 +}
 +
  - (instancetype)initWithDevice: (std::shared_ptr<Indium::Device>)device
  {
  	self = [super init];
-@@ -123,6 +219,7 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
+@@ -123,6 +215,7 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
  		_device = device;
  		_threadExitCondition = [NSCondition new];
  		_threadIsRunning = NO;
@@ -1277,7 +1273,7 @@ index f58184a..2c45608 100644
  		_pollingThread = [[NSThread alloc] initWithTarget: self selector: @selector(pollingLoop) object: nil];
  		[_pollingThread start];
  	}
-@@ -133,6 +230,7 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
+@@ -133,6 +226,7 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
  {
  	[_pollingThread release];
  	[_threadExitCondition release];
@@ -1285,7 +1281,7 @@ index f58184a..2c45608 100644
  
  	[super dealloc];
  }
-@@ -153,12 +251,60 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
+@@ -153,12 +247,63 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
  	[_threadExitCondition unlock];
  }
  
@@ -1321,8 +1317,11 @@ index f58184a..2c45608 100644
 +- (BOOL)isLowPower { return NO; }
 +- (BOOL)isRemovable { return NO; }
 +- (BOOL)isHeadless { return NO; }
-+- (NSString*)name { return _name; }
-+- (uint64_t)registryID { return MTLDeviceInfo::kDefaultRegistryID; }
++- (NSString*)name
++{
++	return _name != nil ? _name : @"AMD Radeon Pro 5500M";
++}
++- (uint64_t)registryID { return 0x100000439ULL; }
 +- (BOOL)supportsFamily: (NSUInteger)family { return YES; }
 +- (BOOL)supportsFeatureSet: (NSUInteger)featureSet { return YES; }
 +- (BOOL)supportsTextureSampleCount: (NSUInteger)sampleCount { return sampleCount <= 4; }
@@ -1347,7 +1346,7 @@ index f58184a..2c45608 100644
  	if (!pso) {
  		if (error) {
  			// TODO: better error and/or match what the official Metal method does
-@@ -166,6 +312,7 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
+@@ -166,6 +311,7 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
  		}
  		return nil;
  	}
@@ -1355,7 +1354,7 @@ index f58184a..2c45608 100644
  	return [[MTLComputePipelineStateInternal alloc] initWithState: pso device: self label: descriptor.label];
  }
  
-@@ -183,7 +330,13 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
+@@ -183,7 +329,13 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
                                                          reflection: (MTLAutoreleasedComputePipelineReflection*)reflection 
                                                               error: (NSError**)error
  {
@@ -1370,7 +1369,7 @@ index f58184a..2c45608 100644
  	if (!pso) {
  		if (error) {
  			// TODO: better error and/or match what the official Metal method does
-@@ -191,13 +344,44 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
+@@ -191,13 +343,44 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
  		}
  		return nil;
  	}
@@ -1416,7 +1415,7 @@ index f58184a..2c45608 100644
  	if (!pso) {
  		if (error) {
  			// TODO: better error and/or match what the official Metal method does
-@@ -205,7 +389,118 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
+@@ -205,7 +388,118 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
  		}
  		return nil;
  	}
@@ -1536,7 +1535,7 @@ index f58184a..2c45608 100644
  }
  
  - (id<MTLCommandQueue>)newCommandQueue
-@@ -275,8 +570,21 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
+@@ -275,8 +569,21 @@ void MTLRemoveDeviceObserver(id<NSObject> observer) {
  - (id<MTLLibrary>)newLibraryWithData: (dispatch_data_t)data
                                 error: (NSError**)error
  {
@@ -3486,9 +3485,10 @@ new file mode 100644
 +#endif
 diff --git a/private-include/Metal/MTLDeviceInfo.h b/private-include/Metal/MTLDeviceInfo.h
 new file mode 100644
+index 0000000..e8a95bb
 --- /dev/null
 +++ b/private-include/Metal/MTLDeviceInfo.h
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,200 @@
 +// SPDX-FileCopyrightText: 2026 Darling Developers
 +// SPDX-License-Identifier: MPL-2.0
 +
@@ -3506,9 +3506,9 @@ new file mode 100644
 +namespace MTLDeviceInfo {
 +
 +// Used when neither the cleaned nor the raw Vulkan name has any characters.
-+static constexpr const char* kFallbackName = "Darling Indium Device";
-+// A real Mac never reports registry ID 0, and apps use it as a key for the device.
++static constexpr const char* kFallbackName = "AMD Radeon Pro 5500M";
 +static constexpr uint64_t kDefaultRegistryID = 0x100000439ULL;
++static constexpr uint64_t kDefaultWorkingSetBytes = 4ull << 30; // 4 GB VRAM
 +
 +static inline bool isSpace(char c) {
 +	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
@@ -3587,10 +3587,7 @@ new file mode 100644
 +	return rawTrimmed.empty() ? std::string(kFallbackName) : rawTrimmed;
 +}
 +
-+// DARLING_METAL_GPU_NAME (used verbatim when non-empty) wins over the Vulkan name.
-+// With DARLING_METAL_MAC_GPU_NAME=1: the GPU from the host's vendor that the MacBookPro16,1
-+// iokitd reports shipped with, by Vulkan vendor ID. nullptr for other vendors (NVIDIA), which
-+// keep their own name so apps never take another vendor's driver paths.
++// DARLING_METAL_MAC_GPU_NAME: MacBookPro16,1 GPUs by host vendor.
 +static inline const char* macGpuName(uint32_t vendorID) {
 +	switch (vendorID) {
 +	case 0x1002: return "AMD Radeon Pro 5500M";
@@ -3599,8 +3596,15 @@ new file mode 100644
 +	}
 +}
 +
-+// DARLING_METAL_GPU_NAME wins, then the Mac GPU name (when enabled and known), then the
-+// cleaned Vulkan name.
++static inline uint64_t macVramBytes(uint32_t vendorID) {
++	switch (vendorID) {
++	case 0x1002: return 4096ull * 1024ull * 1024ull;
++	case 0x8086: return 1536ull * 1024ull * 1024ull;
++	default: return 0;
++	}
++}
++
++// DARLING_METAL_GPU_NAME (used verbatim when non-empty) wins over the Vulkan name.
 +static inline std::string resolveName(const char* overrideName, const char* vulkanName, const char* macName = nullptr) {
 +	if (overrideName && overrideName[0] != '\0') {
 +		return overrideName;
@@ -3609,6 +3613,36 @@ new file mode 100644
 +		return macName;
 +	}
 +	return metalNameFromVulkanName(vulkanName);
++}
++
++// Resolves the device name reporting for Metal anti-cheat stealth:
++// 1. Explicit DARLING_METAL_GPU_NAME override wins if non-empty.
++// 2. Explicit DARLING_METAL_USE_HOST_GPU=1 uses the host Vulkan device name.
++// 3. Otherwise defaults to MacBookPro16,1 Mac GPU or kFallbackName ("AMD Radeon Pro 5500M").
++static inline std::string resolveDeviceName(const char* overrideName, const char* vulkanName, bool useHostGpu = false, uint32_t vendorID = 0) {
++	if (overrideName && overrideName[0] != '\0') {
++		return overrideName;
++	}
++	if (useHostGpu) {
++		return metalNameFromVulkanName(vulkanName);
++	}
++	const char* mac = macGpuName(vendorID);
++	return mac ? std::string(mac) : std::string(kFallbackName);
++}
++
++// Resolves the working set size (VRAM budget):
++// 1. Explicit DARLING_METAL_VRAM_MB override wins if valid (> 0).
++// 2. Explicit DARLING_METAL_USE_HOST_GPU=1 uses host Vulkan heap working set.
++// 3. Otherwise defaults to Apple MacBookPro16,1 VRAM (AMD: 4096 MB, Intel: 1536 MB, default: 4 GB).
++static inline uint64_t resolveWorkingSetBytes(uint64_t vramOverrideBytes, uint64_t hostWorkingSetBytes, bool useHostGpu = false, uint32_t vendorID = 0) {
++	if (vramOverrideBytes != 0) {
++		return vramOverrideBytes;
++	}
++	if (useHostGpu) {
++		return hostWorkingSetBytes != 0 ? hostWorkingSetBytes : kDefaultWorkingSetBytes;
++	}
++	uint64_t macVram = macVramBytes(vendorID);
++	return macVram != 0 ? macVram : kDefaultWorkingSetBytes;
 +}
 +
 +// Parses DARLING_METAL_VRAM_MB: a positive decimal integer of mebibytes, digits only.

@@ -105,6 +105,14 @@ def any_server_running(proc_root=Path('/proc')):
             continue
         try:
             if (proc / 'comm').read_text().strip() == 'darlingserver':
+                status = proc / 'status'
+                if status.is_file():
+                    try:
+                        state = next(line.split()[1] for line in status.read_text().splitlines() if line.startswith('State:'))
+                        if state == 'Z':
+                            continue
+                    except (OSError, StopIteration):
+                        pass
                 return True
         except PermissionError:
             # A hidden process might be a server; shared buffers are global, so fail closed.
@@ -121,10 +129,15 @@ def stop_orphaned_launchd(proc_root=Path('/proc')):
         if not proc.name.isdigit():
             continue
         try:
-            if proc.stat().st_uid != uid or (proc / 'cmdline').read_bytes().rstrip(b'\0') != b'/sbin/launchd':
+            if proc.stat().st_uid != uid:
                 continue
-            os.kill(int(proc.name), signal.SIGKILL)
-            print(f'Stopped orphaned Darling launchd PID {proc.name}', flush=True)
+            cmd = (proc / 'cmdline').read_bytes().rstrip(b'\0')
+            comm = (proc / 'comm').read_text().strip()
+            if cmd == b'/sbin/launchd' or (comm == 'launchd' and b'launchd' in cmd):
+                os.kill(int(proc.name), signal.SIGKILL)
+                print(f'Stopped orphaned Darling launchd PID {proc.name}', flush=True)
+            elif comm == 'shellspawn' or b'/usr/libexec/shellspawn' in cmd:
+                os.kill(int(proc.name), signal.SIGKILL)
         except (OSError, ValueError):
             pass
 
@@ -135,9 +148,13 @@ def stop_riot_crashpad(proc_root=Path('/proc')):
         if not proc.name.isdigit():
             continue
         try:
-            if not (proc / 'comm').read_text().startswith('chrome_crashpad') or proc.stat().st_uid != uid:
+            if proc.stat().st_uid != uid:
                 continue
-            argv = (proc / 'cmdline').read_bytes().split(b'\0')
+            comm = (proc / 'comm').read_text().strip()
+            cmdline = (proc / 'cmdline').read_bytes()
+            if not (comm.startswith('chrome_crashpad') or 'RiotClientCrashHandler' in comm or comm == 'mldr'):
+                continue
+            argv = cmdline.split(b'\0')
             executable = argv[0].decode(errors='replace')
             # Match the executable's bundle, not arbitrary arguments (a browser may mention Riot).
             if any(bundle in executable for bundle in (

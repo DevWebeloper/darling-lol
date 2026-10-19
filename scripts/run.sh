@@ -64,6 +64,12 @@ export PATH="${DARLING_RUNNER_DIR:+$DARLING_RUNNER_DIR:}$repo/usr-local/bin:/usr
 
 python3 scripts/configure.py >/dev/null
 if [ -d build/venv/bin ]; then PATH="$repo/build/venv/bin:$PATH"; export PATH; fi
+
+# macOS identity stealth: enforce Apple MacBookPro16,1 GPU name and VRAM budget
+export DARLING_METAL_GPU_NAME="${DARLING_METAL_GPU_NAME:-AMD Radeon Pro 5500M}"
+export DARLING_METAL_MAC_GPU_NAME="${DARLING_METAL_MAC_GPU_NAME:-1}"
+export DARLING_METAL_VRAM_MB="${DARLING_METAL_VRAM_MB:-4096}"
+
 # darling-lol perf: optionally wrap with gamemoderun for automatic
 # CPU governor, nice level, and scheduler optimizations.
 if [ "${RCLOL_GAMEMODE:-auto}" != "0" ] && command -v gamemoderun >/dev/null 2>&1; then
